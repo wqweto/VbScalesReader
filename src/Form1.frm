@@ -361,7 +361,6 @@ Private Function pvParseElicomResponse(uData As UcsScaleDataType, ByVal bAllowZe
     With uData
         If InStr(.Received, Chr$(ELI_UNS)) > 0 Then
             If Not bAllowZero Then
-                .Received = vbNullString
                 pvParseElicomResponse = ucsScaResultRetryZero
             Else
                 .Status = ucsScaStatusUnstable
@@ -376,7 +375,6 @@ Private Function pvParseElicomResponse(uData As UcsScaleDataType, ByVal bAllowZe
                 .Response = .Response & Right$("0" & Hex$(lChar), 2)
             Next
             If lSum <> Asc(Mid$(.Received, 4, 1)) Then
-                .Received = vbNullString
                 pvParseElicomResponse = ucsScaResultRetrySend
             Else
                 .Status = ucsScaStatusStable
