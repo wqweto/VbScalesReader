@@ -98,6 +98,7 @@ Private Enum UcsScaleProtocolEnum
     ucsScaProtocolDibal
     ucsScaProtocolMettler
     ucsScaProtocolDelmac
+    ucsScaProtocolBimco
 End Enum
 
 Private Enum UcsScaleStatusEnum
@@ -116,6 +117,7 @@ Private Enum UcsControlSymbols
     ACK = 6
     NAK = &H15
     DC1 = &H11
+    BMK_REQ = &H36
     ELI_REQ = &HAA
     ELI_UNS = &HBB
 End Enum
@@ -150,7 +152,7 @@ End Sub
 
 Private Sub Form_Load()
     ReDim m_uData(0 To 1) As UcsScaleDataType
-    m_uData(0).Protocol = ucsScaProtocolCas
+    m_uData(0).Protocol = ucsScaProtocolBimco
     If Not pvOpenPort(0, 1, 9600, m_sLastError) Then
         MsgBox m_sLastError, vbExclamation
     End If
@@ -254,6 +256,8 @@ Private Function pvReadWeight( _
                 m_uData(lIdx).Request = "SI" & vbCrLf
             Case ucsScaProtocolDelmac
                 m_uData(lIdx).Request = vbNullString
+            Case ucsScaProtocolBimco
+                m_uData(lIdx).Request = Chr$(BMK_REQ)
             End Select
             m_uData(lIdx).Received = vbNullString
             If LenB(m_uData(lIdx).Request) <> 0 Then
@@ -279,6 +283,8 @@ Private Function pvReadWeight( _
                     eResult = pvParseMettlerResponse(m_uData(lIdx), bAllowZero)
                 Case ucsScaProtocolDelmac
                     eResult = pvParseDelmacResponse(m_uData(lIdx), bAllowZero)
+                Case ucsScaProtocolBimco
+                    eResult = pvParseBimcoResponse(m_uData(lIdx), bAllowZero)
                 Case Else
                     eResult = ucsScaResultContinue
                 End Select
@@ -487,6 +493,54 @@ Private Function pvParseDelmacResponse(uData As UcsScaleDataType, ByVal bAllowZe
             End If
         ElseIf lEnd > 0 Then
             .Received = Mid$(.Received, lEnd + 1)
+        End If
+    End With
+End Function
+
+Private Function pvParseBimcoResponse(uData As UcsScaleDataType, ByVal bAllowZero As Boolean) As UcsParseResultEnum
+    Const IDX_WIEGHT    As Long = 0
+    Const IDX_POWER10   As Long = 3
+    Const IDX_STATUS    As Long = 4
+    Const IDX_ERROR     As Long = 5
+    Const IDX_CRC       As Long = 6
+    Const FLAG_STABLE   As Long = 1
+    Const FLAG_UNDRLOAD As Long = 4
+    Dim lStart          As Long
+    Dim lIdx            As Long
+    Dim lSum            As Long
+    Dim baRecv()        As Byte
+    
+    With uData
+        lStart = Len(.Received) - 7
+        If lStart > 0 Then
+            .Response = Mid$(.Received, lStart)
+            baRecv = StrConv(.Response, vbFromUnicode)
+            For lIdx = 0 To IDX_CRC - 1
+                lSum = lSum + baRecv(lIdx)
+            Next
+            If lSum <> (baRecv(IDX_CRC) * &H100& Or baRecv(IDX_CRC + 1)) Or baRecv(IDX_POWER10) > 10 Then
+                pvParseBimcoResponse = ucsScaResultRetrySend
+            Else
+                If baRecv(IDX_ERROR) <> 0 Then
+                    .Status = ucsScaStatusOverload
+                ElseIf (baRecv(IDX_STATUS) And FLAG_STABLE) <> 0 Then
+                    .Status = ucsScaStatusStable
+                ElseIf (baRecv(IDX_STATUS) And FLAG_UNDRLOAD) = 0 Then
+                    .Status = ucsScaStatusUnderload
+                Else
+                    .Status = ucsScaStatusUnstable
+                End If
+                .Weight = (IIf(baRecv(IDX_WIEGHT) And &H80, &HFF000000, 0) _
+                    Or baRecv(IDX_WIEGHT) * &H10000 _
+                    Or baRecv(IDX_WIEGHT + 1) * &H100& _
+                    Or baRecv(IDX_WIEGHT + 2)) / (10 ^ baRecv(IDX_POWER10))
+                If .Status = ucsScaStatusStable And Abs(.Weight) < DBL_EPSILON And Not bAllowZero Then
+                    pvParseBimcoResponse = ucsScaResultRetryZero
+                Else
+                    '--- success
+                    pvParseBimcoResponse = ucsScaResultHasResult
+                End If
+            End If
         End If
     End With
 End Function
